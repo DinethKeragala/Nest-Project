@@ -18,18 +18,26 @@ export class GreyscaleService {
 
       const result = await convertToGreyscale(imagePath);
 
+      console.log('Greyscale result:', {
+        width: result.width,
+        height: result.height,
+        bufferSize: result.buffer.length,
+        expectedSize: result.width * result.height * 3
+      });
+
       const outputDir = path.join(process.cwd(), 'apps/basic-processing/output_images');
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
-      const outputFilename = filename.endsWith('.png') ? `${filename}.jpg` : filename;
+      const outputFilename = filename.endsWith('.png') ? filename : `${filename}.png`;
       const outputPath = path.join(outputDir, outputFilename);
 
+      // Save the grayscale image (3 channels)
       await sharp(result.buffer, {
         raw: {
-          width: result.height,
-          height: result.width,
+          width: result.width,
+          height: result.height,
           channels: 3
         }
       })
@@ -41,6 +49,7 @@ export class GreyscaleService {
         filePath: outputPath
       };
     } catch (error) {
+      console.error('Greyscale error:', error);
       return {
         success: false,
         error: error.message

@@ -6,12 +6,26 @@ import * as path from 'path';
 
 @Injectable()
 export class SharpenService {
-  // Do not change the this kernel
-  private readonly strongKernel = [
-    [-1, -1, -1],
-    [-1, 9, -1],
-    [-1, -1, -1],
+  // Sharpening kernel
+  private readonly sharpenKernel = [
+    [0, -1, 0],
+    [-1, 5, -1],
+    [0, -1, 0]
   ];
+
+  private readonly kernelSize = 3;
+  private readonly kernelOffset = Math.floor(this.kernelSize / 2);
+  private readonly kernelWeightSum = this.calculateKernelWeightSum();
+
+  private calculateKernelWeightSum(): number {
+    let sum = 0;
+    for (let y = 0; y < this.kernelSize; y++) {
+      for (let x = 0; x < this.kernelSize; x++) {
+        sum += Math.abs(this.sharpenKernel[y][x]);
+      }
+    }
+    return sum;
+  }
 
   private applyConvolution(
     imageData: Buffer,
@@ -20,20 +34,27 @@ export class SharpenService {
     channels: number
   ): Buffer {
     const result = Buffer.alloc(imageData.length);
-    const offset = 1;
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         for (let c = 0; c < channels; c++) {
           let sum = 0;
-          const pixelIndex = (y * width + x) * channels + c;
 
-          for (let ky = -offset; ky <= offset; ky++) {
-            for (let kx = -offset; kx <= offset; kx++) {
+          for (let ky = -this.kernelOffset; ky <= this.kernelOffset; ky++) {
+            for (let kx = -this.kernelOffset; kx <= this.kernelOffset; kx++) {
+              const posX = x + kx;
+              const posY = y + ky;
+
+              if (posX >= 0 && posX < width && posY >= 0 && posY < height) {
+                const kernelValue = this.sharpenKernel[ky + this.kernelOffset][kx + this.kernelOffset];
+                const pixelIndex = (posY * width + posX) * channels + c;
+                sum += imageData[pixelIndex] * kernelValue;
+              }
             }
           }
 
-          result[pixelIndex] = Math.min(255, Math.max(0, Math.round(sum)));
+          const index = (y * width + x) * channels + c;
+          result[index] = Math.min(255, Math.max(0, Math.round(sum / this.kernelWeightSum)));
         }
       }
     }
@@ -49,7 +70,7 @@ export class SharpenService {
       }
 
       const outputDir = path.join(process.cwd(), 'apps/basic-processing/output_images');
-      const outputFilePath = path.join(outputDir, 'sharpened_image.png');
+      const outputFile = path.join(outputDir, 'sharpened_image.png');
       if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
       const image = sharp(imagePath);
@@ -57,30 +78,28 @@ export class SharpenService {
       const { width, height, channels = 3 } = metadata;
 
       const imageBuffer = await image.raw().toBuffer();
+      const sharpenedBuffer = this.applyConvolution(imageBuffer, width!, height!, channels);
 
-      const sharpened = this.applyConvolution(imageBuffer, width!, height!, channels);
-
-      await sharp(sharpened, {
+      await sharp(sharpenedBuffer, {
         raw: {
           width: width!,
           height: height!,
           channels,
         },
       })
-        .png({ compressionLevel: 6 })
-        .toFile(outputFilePath);
+        .png()
+        .toFile(outputFile);
 
       return {
         success: true,
-        message: 'Image sharpened without resizing',
-        savedImagePath: outputFilePath,
+        message: 'Image sharpened successfully',
+        savedImagePath: outputFile,
       };
-    } catch (error) {
-      console.error('Sharpening failed:', error);
+    } catch (err) {
       return {
         success: false,
-        message: 'Image sharpening failed',
-        error: error.message,
+        message: 'Failed to sharpen image',
+        error: err.message,
       };
     }
   }

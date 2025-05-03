@@ -10,35 +10,47 @@ import { nonMaxSuppression } from './nonMaxSuppression';
 import { doubleThreshold } from './doubleThreshold';
 import { hysteresis } from './hysteresis';
 
-
 @Injectable()
 export class CannyEdgeDetectionService {
   @MessagePattern({ cmd: 'canny_edge_detection' })
   async detectEdges(imagePath: string) {
     try {
-      if (!fs.existsSync(imagePath)) throw new Error('File does not exist');
+      if (!fs.existsSync(imagePath)) {
+        throw new Error('File does not exist');
+      }
 
       const outputDir = path.join(process.cwd(), 'apps/feature-detection/output_images');
       const outputFileName = 'canny_edges.png';
       const outputFilePath = path.join(outputDir, outputFileName);
-      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-      // Convert to greyscale
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+
+      // Step 1: Convert to greyscale
       const { buffer: gray, width, height } = await convertToGreyscale(imagePath);
 
-      // Calculate gradients
-      const { magnitude, direction } = computeSobelGradients(gray, width!, height!);
+      // Step 2: Apply Gaussian blur
+      const blurred = applyGaussianBlur(gray, width!, height!);
 
-      // Non-Max Suppression
+      // Step 3: Calculate gradients using Sobel operator
+      const { magnitude, direction } = computeSobelGradients(blurred, width!, height!);
+
+      // Step 4: Apply non-maximum suppression
       const thinEdges = nonMaxSuppression(magnitude, direction, width!, height!);
 
-      // Double Threshold
+      // Step 5: Apply double threshold
       const { strongEdges, weakEdges } = doubleThreshold(thinEdges, width!, height!, 5, 25);
 
+      // Step 6: Apply hysteresis
+      const finalEdges = hysteresis(strongEdges, weakEdges, width!, height!);
+
       // Save the final output
-      await sharp(strongEdges, {
+      await sharp(finalEdges, {
         raw: { width: width!, height: height!, channels: 1 },
-      }).png().toFile(outputFilePath);
+      })
+        .png()
+        .toFile(outputFilePath);
 
       return {
         success: true,
@@ -46,7 +58,10 @@ export class CannyEdgeDetectionService {
         savedImagePath: outputFilePath,
       };
     } catch (error) {
-      return { success: false, error: error.message };
+      return {
+        success: false,
+        error: error.message,
+      };
     }
   }
 }

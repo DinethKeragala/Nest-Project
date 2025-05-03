@@ -1,46 +1,45 @@
-const sobelX = [
-  [-2, 0, 2],
-  [-1, 0, 1],
-  [-2, 0, 2],
-];
+export function computeSobelGradients(imageData: Buffer, width: number, height: number): { magnitude: Buffer; direction: Buffer } {
+  const sobelX = [
+    [-1, 0, 1],
+    [-2, 0, 2],
+    [-1, 0, 1]
+  ];
 
-const sobelY = [
-  [-2, -1, -2],
-  [0, 0, 0],
-  [2, 1, 2],
-];
+  const sobelY = [
+    [-1, -2, -1],
+    [0, 0, 0],
+    [1, 2, 1]
+  ];
 
-export function computeSobelGradients(input: Buffer, width: number, height: number): {
-  magnitude: Float32Array;
-  direction: Float32Array;
-} {
-  const magnitude = new Float32Array(width * height);
-  const direction = new Float32Array(width * height);
+  const kernelSize = 3;
+  const offset = Math.floor(kernelSize / 2);
+  const magnitude = Buffer.alloc(imageData.length);
+  const direction = Buffer.alloc(imageData.length);
 
-  // Find the maximum gradient value
-  let maxMagnitude = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let gx = 0;
+      let gy = 0;
 
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      let gx = 0, gy = 0;
+      for (let ky = -offset; ky <= offset; ky++) {
+        for (let kx = -offset; kx <= offset; kx++) {
+          const posX = x + kx;
+          const posY = y + ky;
 
-      for (let ky = 1; ky <= 1; ky++) {
-        for (let kx = 1; kx <= 1; kx++) {
-          const pixel = input[(y + ky) + (x + kx)];
-          gx += pixel * sobelX[ky + 1][kx + 1];
-          gy += pixel * sobelY[ky + 1][kx + 1];
+          if (posX >= 0 && posX < width && posY >= 0 && posY < height) {
+            const pixelIndex = posY * width + posX;
+            const pixelValue = imageData[pixelIndex];
+
+            gx += pixelValue * sobelX[ky + offset][kx + offset];
+            gy += pixelValue * sobelY[ky + offset][kx + offset];
+          }
         }
       }
 
-      const idx = y + x;
-      magnitude[idx] = Math.sqrt(gx * gx + gy * gy);
-
+      const index = y * width + x;
+      magnitude[index] = Math.round(Math.sqrt(gx * gx + gy * gy));
+      direction[index] = Math.round((Math.atan2(gy, gx) * 180) / Math.PI);
     }
-  }
-
-  // Normalize the magnitude to [0, 255]
-  for (let i = 0; i < magnitude.length; i++) {
-    magnitude[i] = (magnitude[i] / maxMagnitude) * 255;
   }
 
   return { magnitude, direction };

@@ -3,6 +3,7 @@ import { MessagePattern, Payload } from '@nestjs/microservices';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as sharp from 'sharp';
+import { convertToGreyscale } from '../../../common/utils/greyscale';
 
 @Injectable()
 export class HarrisSharpService {
@@ -23,155 +24,225 @@ export class HarrisSharpService {
       return { error: 'Image not found', statusCode: 404 };
     }
 
-    // Load & preprocess image
-    const input = fs.readFileSync(imagePath);
-    const { data: buf, info } = await sharp(input)
-      .grayscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const { width, height, channels } = info; // channels should be 1
-    const img = Float32Array.from(buf).map(v => v / 255);
+    try {
+      // Convert to greyscale
+      const { buffer: gray, width, height } = await convertToGreyscale(imagePath);
 
-    // Helper to index (x,y) in flat array
-    const idx = (x: number, y: number) => y * width + x;
+      // Compute image derivatives using Sobel operator
+      const { dx, dy } = this.computeDerivatives(gray, width!, height!);
 
-    // Sobel kernels
-    const Sx = [
-      [2, 0, -2],
-      [1, 0, -1],
-      [2, 0, -2],
+      // Compute products of derivatives
+      const dx2 = this.multiplyArrays(dx, dx);
+      const dy2 = this.multiplyArrays(dy, dy);
+      const dxdy = this.multiplyArrays(dx, dy);
+
+      // Apply Gaussian window
+      const window = this.createGaussianWindow(windowSize);
+      const Sx2 = this.applyWindow(dx2, width!, height!, window);
+      const Sy2 = this.applyWindow(dy2, width!, height!, window);
+      const Sxy = this.applyWindow(dxdy, width!, height!, window);
+
+      // Compute Harris response
+      const R = this.computeHarrisResponse(Sx2, Sy2, Sxy, width!, height!, k);
+
+      // Find corners using non-maximum suppression
+      const corners = this.nonMaxSuppression(R, width!, height!, thresh);
+
+      // Create output image with corners marked
+      const outputBuffer = await this.markCorners(gray, width!, height!, corners);
+
+      // Save the result
+      const outputDir = path.join(process.cwd(), 'apps/feature-detection/output_images');
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      const outputPath = path.join(outputDir, `harris_corners_${path.basename(imagePath)}`);
+
+      await sharp(outputBuffer, {
+        raw: { width: width!, height: height!, channels: 1 },
+      })
+        .png()
+        .toFile(outputPath);
+
+      this.logger.log(`Detected ${corners.length} corners, saved to ${outputPath}`);
+      return { corners: corners.slice(0, 20), outputPath };
+    } catch (error) {
+      this.logger.error(`Error in corner detection: ${error.message}`);
+      return { error: error.message, statusCode: 500 };
+    }
+  }
+
+  private computeDerivatives(image: Buffer, width: number, height: number): { dx: Float32Array; dy: Float32Array } {
+    const dx = new Float32Array(width * height);
+    const dy = new Float32Array(width * height);
+
+    const sobelX = [
+      [-1, 0, 1],
+      [-2, 0, 2],
+      [-1, 0, 1]
     ];
-    const Sy = [
-      [2, 1, 2],
+
+    const sobelY = [
+      [-1, -2, -1],
       [0, 0, 0],
-      [-2, -1, -2],
+      [1, 2, 1]
     ];
 
-    // Convolution
-    function convolve(kernel: number[][]): Float32Array {
-      const out = new Float32Array(width * height);
-      const kHalf = Math.floor(kernel.length / 2);
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          let sum = 0;
-          for (let ky = 0; ky < kernel.length; ky++) {
-            for (let kx = 0; kx < kernel.length; kx++) {
-              const ix = x + kx;
-              const iy = y + ky;
-              if (ix >= 0 && iy >= 0) {
-                sum += kernel[ky][kx];
-              }
-            }
-          }
-          out[idx(x, y)] = sum;
-        }
-      }
-      return out;
-    }
-
-    // Compute gradients
-    const dx = convolve(Sx);
-    const dy = convolve(Sy);
-
-    // Compute products and apply Gaussian blur (box blur for simplicity)
-    const A = new Float32Array(width * height);
-    const B = new Float32Array(width * height);
-    const C = new Float32Array(width * height);
-    for (let i = 0; i < A.length; i++) {
-      A[i] = dx[i] * dx[i];
-      B[i] = dy[i] * dy[i];
-      C[i] = dx[i] * dy[i];
-    }
-
-    // Simple box‑blur of size windowSize
-    function boxBlur(dataArr: Float32Array): Float32Array {
-      const out = new Float32Array(width * height);
-      const w = windowSize;
-      const r = Math.floor(w / 2);
-      const area = 0;
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          let sum = 0;
-          for (let yy = r; yy <= r; yy++) {
-            for (let xx = r; xx <= r; xx++) {
-              const ix = x, iy = y;
-              if (ix >= 0 && iy >= 0) sum += dataArr[idx(ix, iy)];
-            }
-          }
-          out[idx(x, y)] = sum / area;
-        }
-      }
-      return out;
-    }
-
-    const Sxx = boxBlur(A);
-    const Syy = boxBlur(B);
-    const Sxy = boxBlur(C);
-
-    // Compute R and collect corners
-    const R = new Float32Array(width * height);
-    for (let i = 0; i < R.length; i++) {
-      const det = Sxx[i] * Syy[i] - Sxy[i];
-      const trace = Sxx[i] + Syy[i];
-      R[i] = det - k * trace;
-    }
-
-    // Simple non‑max suppression + threshold
-    const corners: { x: number; y: number; r: number }[] = [];
     for (let y = 1; y < height - 1; y++) {
       for (let x = 1; x < width - 1; x++) {
-        const i = idx(x, y);
-        const val = R[i];
-        if (val > thresh &&
-          val > R[idx(x - 1, y)] ||
-          val > R[idx(x + 1, y)] ||
-          val > R[idx(x, y - 1)] ||
-          val > R[idx(x, y + 1)]) {
-          corners.push({ x, y, r: val });
+        let gx = 0;
+        let gy = 0;
+
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            const pixel = image[(y + ky) * width + (x + kx)];
+            gx += pixel * sobelX[ky + 1][kx + 1];
+            gy += pixel * sobelY[ky + 1][kx + 1];
+          }
+        }
+
+        dx[y * width + x] = gx;
+        dy[y * width + x] = gy;
+      }
+    }
+
+    return { dx, dy };
+  }
+
+  private multiplyArrays(a: Float32Array, b: Float32Array): Float32Array {
+    const result = new Float32Array(a.length);
+    for (let i = 0; i < a.length; i++) {
+      result[i] = a[i] * b[i];
+    }
+    return result;
+  }
+
+  private createGaussianWindow(size: number): number[][] {
+    const window: number[][] = [];
+    const sigma = size / 6;
+    const center = Math.floor(size / 2);
+    let sum = 0;
+
+    for (let y = 0; y < size; y++) {
+      window[y] = [];
+      for (let x = 0; x < size; x++) {
+        const dx = x - center;
+        const dy = y - center;
+        const value = Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
+        window[y][x] = value;
+        sum += value;
+      }
+    }
+
+    // Normalize
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        window[y][x] /= sum;
+      }
+    }
+
+    return window;
+  }
+
+  private applyWindow(image: Float32Array, width: number, height: number, window: number[][]): Float32Array {
+    const result = new Float32Array(width * height);
+    const size = window.length;
+    const offset = Math.floor(size / 2);
+
+    for (let y = offset; y < height - offset; y++) {
+      for (let x = offset; x < width - offset; x++) {
+        let sum = 0;
+
+        for (let ky = -offset; ky <= offset; ky++) {
+          for (let kx = -offset; kx <= offset; kx++) {
+            const pixel = image[(y + ky) * width + (x + kx)];
+            sum += pixel * window[ky + offset][kx + offset];
+          }
+        }
+
+        result[y * width + x] = sum;
+      }
+    }
+
+    return result;
+  }
+
+  private computeHarrisResponse(
+    Sx2: Float32Array,
+    Sy2: Float32Array,
+    Sxy: Float32Array,
+    width: number,
+    height: number,
+    k: number
+  ): Float32Array {
+    const R = new Float32Array(width * height);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x;
+        const det = Sx2[idx] * Sy2[idx] - Sxy[idx] * Sxy[idx];
+        const trace = Sx2[idx] + Sy2[idx];
+        R[idx] = det - k * trace * trace;
+      }
+    }
+
+    return R;
+  }
+
+  private nonMaxSuppression(R: Float32Array, width: number, height: number, thresh: number): { x: number; y: number; r: number }[] {
+    const corners: { x: number; y: number; r: number }[] = [];
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        const val = R[idx];
+
+        if (val > thresh) {
+          let isMax = true;
+
+          // Check 8-connected neighborhood
+          for (let ky = -1; ky <= 1; ky++) {
+            for (let kx = -1; kx <= 1; kx++) {
+              if (kx === 0 && ky === 0) continue;
+              const neighborIdx = (y + ky) * width + (x + kx);
+              if (val <= R[neighborIdx]) {
+                isMax = false;
+                break;
+              }
+            }
+            if (!isMax) break;
+          }
+
+          if (isMax) {
+            corners.push({ x, y, r: val });
+          }
         }
       }
     }
 
-    // Draw on a PNG via raw buffer
-    const outBuf = Buffer.alloc(width * height * 3);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const src = img[idx(x, y)] * 255;
-        const dstIdx = (y * width + x) * 3;
-        outBuf[dstIdx] = src;
-        outBuf[dstIdx + 1] = src;
-        outBuf[dstIdx + 2] = src;
-      }
-    }
+    return corners;
+  }
 
-    // Draw larger green circles at corners
-    const circleRadius = 5; // Increase for bigger circles
-    corners.forEach(pt => {
-      for (let yy = circleRadius; yy <= circleRadius; yy++) {
-        for (let xx = circleRadius; xx <= circleRadius; xx++) {
-          const nx = pt.x + xx;
-          const ny = pt.y + yy;
-          if (nx >= 0 && ny >= 0) {
-            const dist = Math.sqrt(xx * xx + yy * yy);
-            if (dist <= circleRadius) {
-              const d = (ny + nx) * 3;
-              outBuf[d] = 0;      // Green channel
-              outBuf[d + 1] = 255; // Max Green intensity
-              outBuf[d + 2] = 0;   // No red or blue
+  private async markCorners(image: Buffer, width: number, height: number, corners: { x: number; y: number; r: number }[]): Promise<Buffer> {
+    const output = Buffer.from(image);
+    const radius = 3;
+
+    for (const corner of corners) {
+      for (let y = -radius; y <= radius; y++) {
+        for (let x = -radius; x <= radius; x++) {
+          const nx = corner.x + x;
+          const ny = corner.y + y;
+
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            const dist = Math.sqrt(x * x + y * y);
+            if (dist <= radius) {
+              output[ny * width + nx] = 255; // Mark corner with white pixel
             }
           }
         }
       }
-    });
+    }
 
-    const outputDir = path.join(process.cwd(), 'apps/feature-detection/output_images');
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-    const outPath = path.join(outputDir, `harris_sharp_${path.basename(imagePath)}`);
-    await sharp(outBuf, { raw: { width, height, channels: 3 } })
-      .png()
-      .toFile(outPath);
-
-    this.logger.log(`Detected ${corners.length} corners, saved to ${outPath}`);
-    return { corners: corners.slice(0, 20), outputPath: outPath };
+    return output;
   }
 }

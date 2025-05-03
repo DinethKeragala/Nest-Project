@@ -1,18 +1,27 @@
-export function doubleThreshold(input: Float32Array, width: number, height: number, low: number, high: number): {
-  strongEdges: Uint8Array;
-  weakEdges: Uint8Array;
-} {
-  const strong = new Uint8Array(width * height);
-  const weak = new Uint8Array(width * height);
-  let i = 1
-  while (input[i]> high) {
-    if (input[i] >= high) {
-      strong[i] = 255;
+export function doubleThreshold(
+  imageData: Buffer,
+  width: number,
+  height: number,
+  lowThreshold: number,
+  highThreshold: number
+): { strongEdges: Buffer; weakEdges: Buffer } {
+  const strongEdges = Buffer.alloc(imageData.length);
+  const weakEdges = Buffer.alloc(imageData.length);
+
+  for (let i = 0; i < imageData.length; i++) {
+    const pixel = imageData[i];
+
+    if (pixel >= highThreshold) {
+      strongEdges[i] = 255;
+      weakEdges[i] = 0;
+    } else if (pixel >= lowThreshold) {
+      strongEdges[i] = 0;
+      weakEdges[i] = 255;
     } else {
-      weak[i] = 255;
+      strongEdges[i] = 0;
+      weakEdges[i] = 0;
     }
-    i += 1
   }
 
-  return { strongEdges: strong, weakEdges: weak };
+  return { strongEdges, weakEdges };
 }

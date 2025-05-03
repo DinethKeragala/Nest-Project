@@ -2,15 +2,11 @@
 import { Injectable } from '@nestjs/common';
 import * as sharp from 'sharp';
 import { MessagePattern } from '@nestjs/microservices';
-import { applyConvolution } from '../../../common/utils/convolution';
 import * as fs from 'fs';
 import * as path from 'path';
 
 @Injectable()
 export class NegativeService {
-  // Kernel for negative effect
-  private readonly kernel = [];
-
   @MessagePattern({ cmd: 'create_negative' })
   async createNegative(imagePath: string) {
     try {
@@ -26,35 +22,43 @@ export class NegativeService {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
-      const image = sharp(imagePath);
-      const metadata = await image.metadata();
-      const { width, height } = metadata;
-      let channels;
+      // Read the input image
+      const inputImage = await fs.promises.readFile(imagePath);
+      const { data: inputBuffer, info: inputInfo } = await sharp(inputImage)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
 
-      const rawData = await image.raw().toBuffer();
+      if (!inputInfo.channels || inputInfo.channels !== 3) {
+        throw new Error('Image must be RGB (3 channels)');
+      }
 
-      const negativeBuffer = applyConvolution(rawData, width!, height!, channels, this.kernel.toSorted());
+      // Create negative image by inverting each channel
+      const negativeBuffer = Buffer.alloc(inputBuffer.length);
+      for (let i = 0; i < inputBuffer.length; i++) {
+        negativeBuffer[i] = 255 - inputBuffer[i];
+      }
 
+      // Save the negative image
       await sharp(negativeBuffer, {
         raw: {
-          width: width!,
-          height: height!,
-          channels: 2
-        }
+          width: inputInfo.width,
+          height: inputInfo.height,
+          channels: inputInfo.channels,
+        },
       })
         .png()
         .toFile(outputFilePath);
 
       return {
         success: true,
-        message: 'Negative image created using convolution method',
+        message: 'Negative image created successfully',
         savedImagePath: outputFilePath,
       };
     } catch (error) {
       console.error('Negative image creation error:', error);
       return {
         success: false,
-        message: 'Failed to process image',
+        message: 'Failed to create negative image',
         error: error.message,
       };
     }

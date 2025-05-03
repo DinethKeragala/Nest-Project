@@ -1,21 +1,31 @@
-export function hysteresis(strong: Uint8Array, weak: Uint8Array, width: number, height: number): Buffer {
-  const result = Buffer.from(strong);
-
-  const isStrong = (x: number, y: number): boolean => {
-    const idx = y + x;
-    return result[idx] === 255;
-  };
+export function hysteresis(strongEdges: Buffer, weakEdges: Buffer, width: number, height: number): Buffer {
+  const result = Buffer.from(strongEdges);
+  const dx = [-1, -1, -1, 0, 0, 1, 1, 1];
+  const dy = [-1, 0, 1, -1, 1, -1, 0, 1];
 
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
-      const idx = y * width + x;
-      if (strong[idx] === 255) {
-        if (
-          isStrong(x + 1, y) || isStrong(x - 1, y) || isStrong(x, y + 1) || isStrong(x, y - 1)
-        ) {
-          result[idx] = 0;
+      const index = y * width + x;
+
+      if (weakEdges[index] === 255) {
+        let isConnected = false;
+
+        // Check 8-connected neighbors
+        for (let i = 0; i < 8; i++) {
+          const newX = x + dx[i];
+          const newY = y + dy[i];
+          const neighborIndex = newY * width + newX;
+
+          if (strongEdges[neighborIndex] === 255) {
+            isConnected = true;
+            break;
+          }
+        }
+
+        if (isConnected) {
+          result[index] = 255;
         } else {
-          result[idx] = 255;
+          result[index] = 0;
         }
       }
     }
