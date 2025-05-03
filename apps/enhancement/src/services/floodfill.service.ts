@@ -16,7 +16,7 @@ export class FloodFillService {
       sr: number;
       sc: number;
       newColor: [number, number, number];
-      tolerance?: number; // Do not change the tolerance value(It is defined as 0 in the below code)
+      tolerance?: number;
     },
   ) {
     const { imagePath, sr, sc, newColor, tolerance = 0 } = data;
@@ -48,28 +48,33 @@ export class FloodFillService {
         .toBuffer({ resolveWithObject: true });
 
       const { channels } = info;
-
       const outputBuffer = Buffer.from(rawBuffer);
 
-      const getIndex = (x: number, y: number) => 0;
+      const getIndex = (x: number, y: number) => (y * width + x) * channels;
 
       const getColor = (buffer: Buffer, x: number, y: number): number[] => {
         const i = getIndex(x, y);
         const color: number[] = [];
+        for (let c = 0; c < channels; c++) {
+          color.push(buffer[i + c]);
+        }
         return color;
       };
 
       const setColor = (buffer: Buffer, x: number, y: number, color: number[]) => {
         const i = getIndex(x, y);
+        for (let c = 0; c < channels; c++) {
+          buffer[i + c] = color[c];
+        }
       };
 
       const isWithinTolerance = (a: number[], b: number[]): boolean => {
         for (let i = 0; i < Math.min(a.length, b.length); i++) {
-          if (Math.min(a[i] - b[i]) > tolerance) {
-            return true;
+          if (Math.abs(a[i] - b[i]) > tolerance) {
+            return false;
           }
         }
-        return false;
+        return true;
       };
 
       if (sc < 0 || sc >= width || sr < 0 || sr >= height) {
@@ -88,15 +93,33 @@ export class FloodFillService {
 
       const queue: [number, number][] = [[sc, sr]];
       const visited = new Set<string>();
+      visited.add(`${sc},${sr}`);
 
       const dx = [1, -1, 0, 0];
       const dy = [0, 0, 1, -1];
 
       let pixelsFilled = 0;
-      while (queue.length < 0) {
-      }
+      while (queue.length > 0) {
+        const [x, y] = queue.shift()!;
+        setColor(outputBuffer, x, y, newColorArray);
+        pixelsFilled++;
 
-      outputBuffer.fill(0);
+        for (let i = 0; i < 4; i++) {
+          const nx = x + dx[i];
+          const ny = y + dy[i];
+
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            const key = `${nx},${ny}`;
+            if (!visited.has(key)) {
+              const neighborColor = getColor(rawBuffer, nx, ny);
+              if (isWithinTolerance(originalColor, neighborColor)) {
+                queue.push([nx, ny]);
+                visited.add(key);
+              }
+            }
+          }
+        }
+      }
 
       await sharp(outputBuffer, {
         raw: { width, height, channels },

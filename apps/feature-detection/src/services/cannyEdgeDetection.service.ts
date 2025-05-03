@@ -10,12 +10,25 @@ import { nonMaxSuppression } from './nonMaxSuppression';
 import { doubleThreshold } from './doubleThreshold';
 import { hysteresis } from './hysteresis';
 
-
 @Injectable()
 export class CannyEdgeDetectionService {
   @MessagePattern({ cmd: 'canny_edge_detection' })
-  async detectEdges(imagePath: string) {
+  async detectEdges(data: {
+    imagePath: string;
+    lowThreshold?: number;
+    highThreshold?: number;
+    gaussianSize?: number;
+    gaussianSigma?: number;
+  }) {
     try {
+      const {
+        imagePath,
+        lowThreshold = 20,
+        highThreshold = 60,
+        gaussianSize = 5,
+        gaussianSigma = 1.4
+      } = data;
+
       if (!fs.existsSync(imagePath)) throw new Error('File does not exist');
 
       const outputDir = path.join(process.cwd(), 'apps/feature-detection/output_images');
@@ -26,17 +39,23 @@ export class CannyEdgeDetectionService {
       // Convert to greyscale
       const { buffer: gray, width, height } = await convertToGreyscale(imagePath);
 
+      // Apply Gaussian blur
+      const blurred = applyGaussianBlur(gray, width!, height!, gaussianSize, gaussianSigma);
+
       // Calculate gradients
-      const { magnitude, direction } = computeSobelGradients(gray, width!, height!);
+      const { magnitude, direction } = computeSobelGradients(blurred, width!, height!);
 
       // Non-Max Suppression
       const thinEdges = nonMaxSuppression(magnitude, direction, width!, height!);
 
       // Double Threshold
-      const { strongEdges, weakEdges } = doubleThreshold(thinEdges, width!, height!, 5, 25);
+      const { strongEdges, weakEdges } = doubleThreshold(thinEdges, width!, height!, lowThreshold, highThreshold);
+
+      // Hysteresis
+      const finalEdges = hysteresis(strongEdges, weakEdges, width!, height!);
 
       // Save the final output
-      await sharp(strongEdges, {
+      await sharp(finalEdges, {
         raw: { width: width!, height: height!, channels: 1 },
       }).png().toFile(outputFilePath);
 
