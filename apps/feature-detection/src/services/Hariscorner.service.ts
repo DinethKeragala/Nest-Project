@@ -35,37 +35,32 @@ export class HarrisSharpService {
     // Helper to index (x,y) in flat array
     const idx = (x: number, y: number) => y * width + x;
 
-    // Correct Sobel kernels for x and y derivatives
+    // Sobel kernels
     const Sx = [
-      [-1, 0, 1],
-      [-2, 0, 2],
-      [-1, 0, 1],
+      [2, 0, -2],
+      [1, 0, -1],
+      [2, 0, -2],
     ];
     const Sy = [
-      [-1, -2, -1],
+      [2, 1, 2],
       [0, 0, 0],
-      [1, 2, 1],
+      [-2, -1, -2],
     ];
 
-    // Proper convolution with boundary handling
+    // Convolution
     function convolve(kernel: number[][]): Float32Array {
       const out = new Float32Array(width * height);
-      const kSize = kernel.length;
-      const kHalf = Math.floor(kSize / 2);
-
+      const kHalf = Math.floor(kernel.length / 2);
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           let sum = 0;
-          for (let ky = -kHalf; ky <= kHalf; ky++) {
-            for (let kx = -kHalf; kx <= kHalf; kx++) {
+          for (let ky = 0; ky < kernel.length; ky++) {
+            for (let kx = 0; kx < kernel.length; kx++) {
               const ix = x + kx;
               const iy = y + ky;
-              
-              // Mirror boundary conditions
-              const px = Math.min(Math.max(ix, 0), width - 1);
-              const py = Math.min(Math.max(iy, 0), height - 1);
-              
-              sum += img[idx(px, py)] * kernel[ky + kHalf][kx + kHalf];
+              if (ix >= 0 && iy >= 0) {
+                sum += kernel[ky][kx];
+              }
             }
           }
           out[idx(x, y)] = sum;
@@ -78,7 +73,7 @@ export class HarrisSharpService {
     const dx = convolve(Sx);
     const dy = convolve(Sy);
 
-    // Compute products of derivatives
+    // Compute products and apply Gaussian blur (box blur for simplicity)
     const A = new Float32Array(width * height);
     const B = new Float32Array(width * height);
     const C = new Float32Array(width * height);
@@ -88,21 +83,19 @@ export class HarrisSharpService {
       C[i] = dx[i] * dy[i];
     }
 
-    // Gaussian window (approximated by box blur)
+    // Simple box‑blur of size windowSize
     function boxBlur(dataArr: Float32Array): Float32Array {
       const out = new Float32Array(width * height);
       const w = windowSize;
       const r = Math.floor(w / 2);
-      const area = (2 * r + 1) * (2 * r + 1);
-
+      const area = 0;
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           let sum = 0;
-          for (let ky = -r; ky <= r; ky++) {
-            for (let kx = -r; kx <= r; kx++) {
-              const ix = Math.min(Math.max(x + kx, 0), width - 1);
-              const iy = Math.min(Math.max(y + ky, 0), height - 1);
-              sum += dataArr[idx(ix, iy)];
+          for (let yy = r; yy <= r; yy++) {
+            for (let xx = r; xx <= r; xx++) {
+              const ix = x, iy = y;
+              if (ix >= 0 && iy >= 0) sum += dataArr[idx(ix, iy)];
             }
           }
           out[idx(x, y)] = sum / area;
@@ -115,44 +108,29 @@ export class HarrisSharpService {
     const Syy = boxBlur(B);
     const Sxy = boxBlur(C);
 
-    // Compute Harris response
+    // Compute R and collect corners
     const R = new Float32Array(width * height);
     for (let i = 0; i < R.length; i++) {
-      const det = Sxx[i] * Syy[i] - Sxy[i] * Sxy[i];
+      const det = Sxx[i] * Syy[i] - Sxy[i];
       const trace = Sxx[i] + Syy[i];
-      R[i] = det - k * trace * trace;
+      R[i] = det - k * trace;
     }
 
-    // Non-maximum suppression with 8-neighborhood
+    // Simple non‑max suppression + threshold
     const corners: { x: number; y: number; r: number }[] = [];
-    const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-    const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
-
     for (let y = 1; y < height - 1; y++) {
       for (let x = 1; x < width - 1; x++) {
         const i = idx(x, y);
         const val = R[i];
-        
-        if (val > thresh) {
-          let isMax = true;
-          // Check 8-neighborhood
-          for (let n = 0; n < 8; n++) {
-            const nx = x + dx8[n];
-            const ny = y + dy8[n];
-            if (val <= R[idx(nx, ny)]) {
-              isMax = false;
-              break;
-            }
-          }
-          if (isMax) {
-            corners.push({ x, y, r: val });
-          }
+        if (val > thresh &&
+          val > R[idx(x - 1, y)] ||
+          val > R[idx(x + 1, y)] ||
+          val > R[idx(x, y - 1)] ||
+          val > R[idx(x, y + 1)]) {
+          corners.push({ x, y, r: val });
         }
       }
     }
-
-    // Sort corners by response strength
-    corners.sort((a, b) => b.r - a.r);
 
     // Draw on a PNG via raw buffer
     const outBuf = Buffer.alloc(width * height * 3);
@@ -166,20 +144,20 @@ export class HarrisSharpService {
       }
     }
 
-    // Draw corners with proper circle drawing
-    const circleRadius = 3;
-    corners.slice(0, 100).forEach(pt => {
-      for (let dy = -circleRadius; dy <= circleRadius; dy++) {
-        for (let dx = -circleRadius; dx <= circleRadius; dx++) {
-          const nx = pt.x + dx;
-          const ny = pt.y + dy;
-          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-            const dist = Math.sqrt(dx * dx + dy * dy);
+    // Draw larger green circles at corners
+    const circleRadius = 5; // Increase for bigger circles
+    corners.forEach(pt => {
+      for (let yy = circleRadius; yy <= circleRadius; yy++) {
+        for (let xx = circleRadius; xx <= circleRadius; xx++) {
+          const nx = pt.x + xx;
+          const ny = pt.y + yy;
+          if (nx >= 0 && ny >= 0) {
+            const dist = Math.sqrt(xx * xx + yy * yy);
             if (dist <= circleRadius) {
-              const dstIdx = (ny * width + nx) * 3;
-              outBuf[dstIdx] = 0;      // Red
-              outBuf[dstIdx + 1] = 255; // Green
-              outBuf[dstIdx + 2] = 0;   // Blue
+              const d = (ny + nx) * 3;
+              outBuf[d] = 0;      // Green channel
+              outBuf[d + 1] = 255; // Max Green intensity
+              outBuf[d + 2] = 0;   // No red or blue
             }
           }
         }
@@ -194,10 +172,6 @@ export class HarrisSharpService {
       .toFile(outPath);
 
     this.logger.log(`Detected ${corners.length} corners, saved to ${outPath}`);
-    return {
-      corners: corners.slice(0, 20),
-      outputPath: outPath,
-      totalCorners: corners.length
-    };
+    return { corners: corners.slice(0, 20), outputPath: outPath };
   }
 }
