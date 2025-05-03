@@ -62,6 +62,31 @@ export class ResizeService {
     outputHeight: number
   ): Buffer {
     const outputBuffer = Buffer.alloc(outputWidth * outputHeight * 3);
+    const xRatio = inputWidth / outputWidth;
+    const yRatio = inputHeight / outputHeight;
+
+    for (let y = 0; y < outputHeight; y++) {
+      for (let x = 0; x < outputWidth; x++) {
+        const x1 = Math.floor(x * xRatio);
+        const y1 = Math.floor(y * yRatio);
+        const x2 = Math.min(x1 + 1, inputWidth - 1);
+        const y2 = Math.min(y1 + 1, inputHeight - 1);
+
+        const x1y1 = (y1 * inputWidth + x1) * 3;
+        const x1y2 = (y2 * inputWidth + x1) * 3;
+        const x2y1 = (y1 * inputWidth + x2) * 3;
+        const x2y2 = (y2 * inputWidth + x2) * 3;
+
+        const xFrac = x * xRatio - x1;
+        const yFrac = y * yRatio - y1;
+
+        for (let c = 0; c < 3; c++) {
+          const top = inputBuffer[x1y1 + c] * (1 - xFrac) + inputBuffer[x2y1 + c] * xFrac;
+          const bottom = inputBuffer[x1y2 + c] * (1 - xFrac) + inputBuffer[x2y2 + c] * xFrac;
+          outputBuffer[(y * outputWidth + x) * 3 + c] = Math.round(top * (1 - yFrac) + bottom * yFrac);
+        }
+      }
+    }
 
     return outputBuffer;
   }

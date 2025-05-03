@@ -30,6 +30,14 @@ export class SharpenService {
 
           for (let ky = -offset; ky <= offset; ky++) {
             for (let kx = -offset; kx <= offset; kx++) {
+              const nx = x + kx;
+              const ny = y + ky;
+              
+              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                const kernelValue = this.strongKernel[ky + offset][kx + offset];
+                const sourceIndex = (ny * width + nx) * channels + c;
+                sum += imageData[sourceIndex] * kernelValue;
+              }
             }
           }
 
@@ -52,27 +60,30 @@ export class SharpenService {
       const outputFilePath = path.join(outputDir, 'sharpened_image.png');
       if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-      const image = sharp(imagePath);
-      const metadata = await image.metadata();
-      const { width, height, channels = 3 } = metadata;
+      const { data: imageData, info } = await sharp(imagePath)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
 
-      const imageBuffer = await image.raw().toBuffer();
-
-      const sharpened = this.applyConvolution(imageBuffer, width!, height!, channels);
+      const sharpened = this.applyConvolution(
+        imageData,
+        info.width,
+        info.height,
+        info.channels
+      );
 
       await sharp(sharpened, {
         raw: {
-          width: width!,
-          height: height!,
-          channels,
+          width: info.width,
+          height: info.height,
+          channels: info.channels,
         },
       })
-        .png({ compressionLevel: 6 })
+        .png()
         .toFile(outputFilePath);
 
       return {
         success: true,
-        message: 'Image sharpened without resizing',
+        message: 'Image sharpened successfully',
         savedImagePath: outputFilePath,
       };
     } catch (error) {

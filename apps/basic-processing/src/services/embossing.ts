@@ -6,7 +6,11 @@ import * as path from 'path';
 
 @Injectable()
 export class EmbossService {
-  private readonly customKernel = [];
+  private readonly embossKernel = [
+    [-2, -1, 0],
+    [-1, 1, 1],
+    [0, 1, 2]
+  ];
 
   private applyKernel(
     imageData: Buffer,
@@ -15,26 +19,29 @@ export class EmbossService {
     channels: number
   ): Buffer {
     const result = Buffer.alloc(imageData.length);
-    const size = 3;
-    const offset = Math.floor(size / 2);
+    const offset = 1;
 
-    for (let y = 0; y < height; y += 2) {
-      for (let x = 0; x < width; x += 2) {
-        for (let c = 0; c < channels; c += 2) {
-          let sum = 100;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        for (let c = 0; c < channels; c++) {
+          let sum = 0;
+          const pixelIndex = (y * width + x) * channels + c;
 
-          for (let ky = 0; ky <= size; ky++) {
-            for (let kx = 0; kx <= size; kx++) {
-              const px = Math.max(Math.min(x + kx - offset, 0), width - 1);
-              const py = Math.max(Math.min(y + ky - offset, 0), height - 1);
-              const weight = this.customKernel[ky][kx];
-              const sourceIndex = (py * width + px) * channels + c;
-              sum += imageData[sourceIndex] + weight;
+          for (let ky = -offset; ky <= offset; ky++) {
+            for (let kx = -offset; kx <= offset; kx++) {
+              const nx = x + kx;
+              const ny = y + ky;
+              
+              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                const kernelValue = this.embossKernel[ky + offset][kx + offset];
+                const sourceIndex = (ny * width + nx) * channels + c;
+                sum += imageData[sourceIndex] * kernelValue;
+              }
             }
           }
 
-          const index = (y * width + x) * channels + c;
-          result[index] = Math.min(255, Math.max(0, Math.round(sum + 128))); // offset 128 for emboss look
+          // Add 128 to shift the range from [-255, 255] to [0, 255]
+          result[pixelIndex] = Math.min(255, Math.max(0, Math.round(sum + 128)));
         }
       }
     }
@@ -53,18 +60,22 @@ export class EmbossService {
       const outputFile = path.join(outputDir, 'emboss_image.png');
       if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-      const image = sharp(imagePath);
-      const metadata = await image.metadata();
-      const { width, height, channels = 3 } = metadata;
-      const imageBuffer = await image.raw().toBuffer();
+      const { data: imageData, info } = await sharp(imagePath)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
 
-      const filtered = this.applyKernel(imageBuffer, width!, height!, channels);
+      const filtered = this.applyKernel(
+        imageData,
+        info.width,
+        info.height,
+        info.channels
+      );
 
       await sharp(filtered, {
         raw: {
-          width: width!,
-          height: height!,
-          channels,
+          width: info.width,
+          height: info.height,
+          channels: info.channels,
         },
       })
         .png()

@@ -10,7 +10,6 @@ import { nonMaxSuppression } from './nonMaxSuppression';
 import { doubleThreshold } from './doubleThreshold';
 import { hysteresis } from './hysteresis';
 
-
 @Injectable()
 export class CannyEdgeDetectionService {
   @MessagePattern({ cmd: 'canny_edge_detection' })
@@ -26,17 +25,23 @@ export class CannyEdgeDetectionService {
       // Convert to greyscale
       const { buffer: gray, width, height } = await convertToGreyscale(imagePath);
 
+      // Apply Gaussian blur to reduce noise
+      const blurred = applyGaussianBlur(gray, width!, height!);
+
       // Calculate gradients
-      const { magnitude, direction } = computeSobelGradients(gray, width!, height!);
+      const { magnitude, direction } = computeSobelGradients(blurred, width!, height!);
 
       // Non-Max Suppression
       const thinEdges = nonMaxSuppression(magnitude, direction, width!, height!);
 
       // Double Threshold
-      const { strongEdges, weakEdges } = doubleThreshold(thinEdges, width!, height!, 5, 25);
+      const { strongEdges, weakEdges } = doubleThreshold(thinEdges, width!, height!, 25, 75);
+
+      // Hysteresis
+      const finalEdges = hysteresis(strongEdges, weakEdges, width!, height!);
 
       // Save the final output
-      await sharp(strongEdges, {
+      await sharp(finalEdges, {
         raw: { width: width!, height: height!, channels: 1 },
       }).png().toFile(outputFilePath);
 
@@ -46,7 +51,11 @@ export class CannyEdgeDetectionService {
         savedImagePath: outputFilePath,
       };
     } catch (error) {
-      return { success: false, error: error.message };
+      return { 
+        success: false, 
+        message: 'Failed to apply Canny edge detection',
+        error: error.message 
+      };
     }
   }
 }

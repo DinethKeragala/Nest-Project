@@ -4,14 +4,24 @@ export function doubleThreshold(input: Float32Array, width: number, height: numb
 } {
   const strong = new Uint8Array(width * height);
   const weak = new Uint8Array(width * height);
-  let i = 1
-  while (input[i]> high) {
-    if (input[i] >= high) {
+
+  // Find max value for relative thresholding
+  let maxVal = 0;
+  for (let i = 0; i < input.length; i++) {
+    maxVal = Math.max(maxVal, input[i]);
+  }
+
+  // Calculate threshold values
+  const highThreshold = maxVal * (high / 255);
+  const lowThreshold = highThreshold * (low / high);
+
+  // Apply double threshold
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] >= highThreshold) {
       strong[i] = 255;
-    } else {
+    } else if (input[i] >= lowThreshold) {
       weak[i] = 255;
     }
-    i += 1
   }
 
   return { strongEdges: strong, weakEdges: weak };

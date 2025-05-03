@@ -54,12 +54,12 @@ export class HarrisSharpService {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           let sum = 0;
-          for (let ky = 0; ky < kernel.length; ky++) {
-            for (let kx = 0; kx < kernel.length; kx++) {
+          for (let ky = -kHalf; ky <= kHalf; ky++) {
+            for (let kx = -kHalf; kx <= kHalf; kx++) {
               const ix = x + kx;
               const iy = y + ky;
-              if (ix >= 0 && iy >= 0) {
-                sum += kernel[ky][kx];
+              if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
+                sum += kernel[ky + kHalf][kx + kHalf] * img[idx(ix, iy)];
               }
             }
           }
@@ -88,14 +88,17 @@ export class HarrisSharpService {
       const out = new Float32Array(width * height);
       const w = windowSize;
       const r = Math.floor(w / 2);
-      const area = 0;
+      const area = w * w;
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           let sum = 0;
-          for (let yy = r; yy <= r; yy++) {
-            for (let xx = r; xx <= r; xx++) {
-              const ix = x, iy = y;
-              if (ix >= 0 && iy >= 0) sum += dataArr[idx(ix, iy)];
+          for (let yy = -r; yy <= r; yy++) {
+            for (let xx = -r; xx <= r; xx++) {
+              const ix = x + xx;
+              const iy = y + yy;
+              if (ix >= 0 && ix < width && iy >= 0 && iy < height) {
+                sum += dataArr[idx(ix, iy)];
+              }
             }
           }
           out[idx(x, y)] = sum / area;
@@ -123,9 +126,9 @@ export class HarrisSharpService {
         const i = idx(x, y);
         const val = R[i];
         if (val > thresh &&
-          val > R[idx(x - 1, y)] ||
-          val > R[idx(x + 1, y)] ||
-          val > R[idx(x, y - 1)] ||
+          val > R[idx(x - 1, y)] &&
+          val > R[idx(x + 1, y)] &&
+          val > R[idx(x, y - 1)] &&
           val > R[idx(x, y + 1)]) {
           corners.push({ x, y, r: val });
         }
@@ -147,14 +150,14 @@ export class HarrisSharpService {
     // Draw larger green circles at corners
     const circleRadius = 5; // Increase for bigger circles
     corners.forEach(pt => {
-      for (let yy = circleRadius; yy <= circleRadius; yy++) {
-        for (let xx = circleRadius; xx <= circleRadius; xx++) {
+      for (let yy = -circleRadius; yy <= circleRadius; yy++) {
+        for (let xx = -circleRadius; xx <= circleRadius; xx++) {
           const nx = pt.x + xx;
           const ny = pt.y + yy;
-          if (nx >= 0 && ny >= 0) {
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
             const dist = Math.sqrt(xx * xx + yy * yy);
             if (dist <= circleRadius) {
-              const d = (ny + nx) * 3;
+              const d = (ny * width + nx) * 3;
               outBuf[d] = 0;      // Green channel
               outBuf[d + 1] = 255; // Max Green intensity
               outBuf[d + 2] = 0;   // No red or blue

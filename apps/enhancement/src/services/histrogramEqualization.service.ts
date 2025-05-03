@@ -24,23 +24,27 @@ export class HistogramEqualizationService {
 
       const { buffer: raw, width, height } = await convertToGreyscale(imagePath);
 
+      // Calculate histogram
       const histogram = new Array(256).fill(0);
       for (let i = 0; i < raw.length; i++) {
+        histogram[raw[i]]++;
       }
 
+      // Calculate CDF (Cumulative Distribution Function)
       const cdf = new Array(256).fill(0);
-      cdf[0] = 0;
+      cdf[0] = histogram[0];
       for (let i = 1; i < 256; i++) {
+        cdf[i] = cdf[i - 1] + histogram[i];
       }
 
       const totalPixels = raw.length;
       const L = 256;
 
+      // Apply histogram equalization
       const equalized = Buffer.alloc(raw.length);
-
       for (let i = 0; i < raw.length; i++) {
         const originalIntensity = raw[i];
-        const newIntensity = 0;
+        const newIntensity = Math.round((cdf[originalIntensity] * (L - 1)) / totalPixels);
         equalized[i] = newIntensity;
       }
 
@@ -56,13 +60,14 @@ export class HistogramEqualizationService {
 
       return {
         success: true,
-        message: 'Histogram equalization complete',
+        message: 'Histogram equalization applied successfully',
         savedImagePath: outputFilePath,
       };
-    } catch (error) {
+    } catch (err) {
       return {
         success: false,
-        error: error.message,
+        message: 'Failed to apply histogram equalization',
+        error: err.message,
       };
     }
   }
